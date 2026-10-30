@@ -2,6 +2,8 @@
 residualization (doc section 20): variance retention, grand-average FRP preservation, split-half reliability.
 
 Surprisal is read, for diagnostics only, from the parent project's GPT-2 surprisal cache when present.
+Outputs are per text fold: results/collinearity_fold<f>.json, validity_per_subject_fold<f>.csv,
+validity_summary_fold<f>.json and data/fold<f>/grand_average_frp.npz.
 
     python scripts/diagnostics.py --fold 1
 """
@@ -99,15 +101,15 @@ def main():
     subs = a.subjects.split(",") if a.subjects else ev.subjects_available()
     paths.RESULTS.mkdir(parents=True, exist_ok=True)
     col = collinearity(E[E.eligible.astype(bool)])
-    (paths.RESULTS / "collinearity.json").write_text(json.dumps(col, indent=1))
+    (paths.RESULTS / f"collinearity_fold{a.fold}.json").write_text(json.dumps(col, indent=1))
     print(json.dumps(col["key_pairs"], indent=1))
     print("VIF", col["vif"])
     per, ga = validity(E, subs)
-    per.to_csv(paths.RESULTS / "validity_per_subject.csv", index=False)
+    per.to_csv(paths.RESULTS / f"validity_per_subject_fold{a.fold}.csv", index=False)
     np.savez(paths.DATA / f"fold{a.fold}" / "grand_average_frp.npz", lags_ms=LAGS * 10, subjects=np.array(subs),
              **{c: v.astype(np.float32) for c, v in ga.items()})
     summ = per.drop(columns="subject").mean().round(4).to_dict()
-    (paths.RESULTS / "validity_summary.json").write_text(json.dumps(summ, indent=1))
+    (paths.RESULTS / f"validity_summary_fold{a.fold}.json").write_text(json.dumps(summ, indent=1))
     print(json.dumps(summ, indent=1))
 
 

@@ -6,12 +6,12 @@ cond "prior" trains nothing and ranks candidates by their training-text frequenc
 
 Outputs in runs/<exp>/fold<f>/sf<k>/<cond>/seed<s>/: model.pt, z.npz (embeddings of train/val/test events
 for probes), test_<gallery>.csv (per-event tie-aware metrics), train_log.json, and metrics.json, written last
-as the completion marker together with the run configuration. A completed run with the same configuration
-is skipped; one with a different configuration is refused unless --overwrite is given.
+(atomically) as the completion marker together with the run configuration: arguments plus digests of the
+input data and code (embc/runs.py). A completed run with the same configuration is skipped; one with a
+different configuration is refused unless --overwrite is given.
 
     python scripts/train_eval.py --fold 1 --subject_fold 0 --cond res --seed 0 [--exp main]
 """
-import argparse
 import json
 import os
 import sys
@@ -69,37 +69,18 @@ def prior_scores(T_count, G):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--fold", type=int, default=1)
-    ap.add_argument("--subject_fold", type=int, default=0)
-    ap.add_argument("--k_subject_folds", type=int, default=3)
-    ap.add_argument("--cond", required=True)
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--epochs", type=int, default=40)
-    ap.add_argument("--patience", type=int, default=6)
-    ap.add_argument("--batch", type=int, default=256)
-    ap.add_argument("--lr", type=float, default=1e-3)
-    ap.add_argument("--wd", type=float, default=1e-2)
-    ap.add_argument("--tau", type=float, default=0.07)
-    ap.add_argument("--select_gallery", default="random_N100")
-    ap.add_argument("--max_train_events", type=int, default=None, help="smoke tests only")
-    ap.add_argument("--exp", default="main", help="experiment name; separates e.g. smoke runs from main runs")
-    ap.add_argument("--overwrite", action="store_true", help="replace a completed run with another config")
-    ap.add_argument("--device", default="cuda")
-    a = ap.parse_args()
+    a = runs.train_parser().parse_args()
     t0 = time.time()
     torch.manual_seed(a.seed)
     np.random.seed(a.seed)
     fdir = paths.fold_dir(a.fold)
-    out = paths.RUNS / a.exp / f"fold{a.fold}" / f"sf{a.subject_fold}" / a.cond / f"seed{a.seed}"
-    data_files = [fdir / "events.csv", fdir / "types.npz", *sorted(fdir.glob("galleries_*.npz")),
-                  paths.DATA / f"subject_folds_k{a.k_subject_folds}.json"]
+    out = runs.run_dir(a)
     E = pd.read_csv(fdir / "events.csv", keep_default_na=False, na_values=[""])
     ty = np.load(fdir / "types.npz")
     T = ty["emb"].astype(np.float32)
     subjects = sorted(E.subject.unique())
     folds = ev.subject_folds(subjects, a.k_subject_folds)              # creates the folds file on first use
-    config = runs.run_config(vars(a), data_files)
+    config = runs.run_config(vars(a), runs.input_digests(a.fold, a.k_subject_folds, a.cond))
     try:
         state = runs.existing_run_state(out, config)
     except runs.RunConfigMismatch as err:
@@ -109,8 +90,6 @@ def main():
     if state == "done":
         print(f"{out}: completed with this configuration, skipping")
         return
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "metrics.json").unlink(missing_ok=True)                    # no stale completion marker
     P = partitions(E, folds, a.subject_fold)
     if a.max_train_events:
         P["train"] = P["train"].sample(min(a.max_train_events, len(P["train"])), random_state=a.seed)
@@ -118,6 +97,11 @@ def main():
     if sizes["test"] < 1 or (a.cond != "prior" and (sizes["train"] < 2 or sizes["val"] < 1)):
         raise SystemExit(f"partition too small for training/evaluation: {sizes}")
     gal = {k: lx.load_galleries(fdir, P[k].event_id.to_numpy()) for k in ("val", "test")}
+    if a.cond != "prior":
+        rsel, Gsel = runs.selection_gallery(gal["val"], a.select_gallery)   # rows index the validation events
+    out.mkdir(parents=True, exist_ok=True)
+    for f in [out / "metrics.json", out / "probes.json", *out.glob("test_*.csv")]:
+        f.unlink(missing_ok=True)                                     # no stale completion marker or outputs
     info = dict(vars(a), test_subjects=folds[a.subject_fold], n_train=len(P["train"]), n_val=len(P["val"]),
                 n_test=len(P["test"]))
 
@@ -125,7 +109,7 @@ def main():
         rows, res = evaluate(None, None, gal["test"], P["test"], scorer=lambda G: prior_scores(ty["train_count"], G))
         for name, df in rows.items():
             df.to_csv(out / f"test_{name}.csv", index=False)
-        (out / "metrics.json").write_text(json.dumps(dict(config=config, info=info, test=res), indent=1))
+        runs.write_atomic(out / "metrics.json", json.dumps(dict(config=config, info=info, test=res), indent=1))
         print(json.dumps({k: v["RR"] for k, v in res.items()}))
         return
 
@@ -176,8 +160,9 @@ def main():
     tid = torch.tensor(allE.type_id.to_numpy(), device=dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd)
     best, best_state, bad_epochs, log = -1.0, None, 0, []
-    rsel, Gsel = gal["val"][a.select_gallery]                       # rows index the validation events
     batches = runs.batch_slices(ntr, a.batch)
+    if not batches:
+        raise SystemExit(f"no optimisation step possible with {ntr} training events")
     for epoch in range(a.epochs):
         model.train()
         perm = torch.randperm(ntr, device=dev)
@@ -189,11 +174,11 @@ def main():
             loss.backward()
             opt.step()
             tot += loss.item(); nb += 1
-        if nb == 0:
-            raise SystemExit(f"no optimisation step possible with {ntr} training events")
         val_mrr = mt.gallery_mrr(embed(ntr, ntr + nva), T, rsel, Gsel)
         log.append(dict(epoch=epoch, loss=tot / nb, val_mrr=val_mrr))
         print(json.dumps(log[-1]), flush=True)
+        if not np.isfinite(val_mrr):
+            raise SystemExit(f"validation MRR is {val_mrr} at epoch {epoch}; no model can be selected")
         if val_mrr > best:
             best, bad_epochs = val_mrr, 0
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
@@ -209,12 +194,13 @@ def main():
     _, summ_val = evaluate(Zva, T, gal["val"], P["val"])
     torch.save(dict(state=best_state, config=info, norm=dict(mu=np.asarray(mu), sd=np.asarray(sd))), out / "model.pt")
     np.savez(out / "z.npz", train_ids=P["train"].event_id.to_numpy(), val_ids=P["val"].event_id.to_numpy(),
-             test_ids=P["test"].event_id.to_numpy(), z_train=Ztr.astype(np.float16), z_val=Zva.astype(np.float16),
-             z_test=Zte.astype(np.float16))
+             test_ids=P["test"].event_id.to_numpy(), z_train=Ztr.astype(np.float16), z_val=Zva.astype(np.float32),
+             z_test=Zte.astype(np.float32))                          # test as scored, for the permutation null
     info.update(best_val_mrr=best, epochs_run=len(log), steps_per_epoch=len(batches),
                 seconds=round(time.time() - t0, 1))
     (out / "train_log.json").write_text(json.dumps(log, indent=1))
-    (out / "metrics.json").write_text(json.dumps(dict(config=config, info=info, val=summ_val, test=summ), indent=1))
+    runs.write_atomic(out / "metrics.json", json.dumps(dict(config=config, info=info, val=summ_val, test=summ),
+                                                      indent=1))
     print(json.dumps({k: v["RR"] for k, v in summ.items()}))
 
 

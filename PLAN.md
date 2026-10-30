@@ -106,14 +106,16 @@ model; LLM generation is out of scope.
 | 3 published model, DERCo, rERP diagnostic, unprocessed-EEG condition | separate scripts | after Stage 2 and decision D1 |
 
 Use `PY=~/venvs/e2t/bin/python` on this machine. Main runs live in `runs/main/`; smoke or exploratory runs
-need their own `EXP` name, and a run directory is only reused when its recorded configuration matches. The scripts read data paths from `embc/paths.py`, which can
+need their own `EXP` name. A run directory is only reused when its recorded configuration (arguments, input
+data digests including the stage-1a EEG, code digests) matches; `OVERWRITE=1` retrains runs that do not, and
+the report refuses runs whose inputs or code changed after training. The scripts read data paths from `embc/paths.py`, which can
 be overridden with `EMBC_*` environment variables.
 
 ## 6. Gates (fixed before any full run; computed by `scripts/report.py`)
 
 | Gate | Criterion (MRR; subject-level, 95% bootstrap CI over readers) | If it fails |
 |---|---|---|
-| G0 engineering | tests pass; 0 unmatched fixations; injection amplitude slope ≥ 0.8 for `res` and `res_ovl` at ρ = 0 | fix the pipeline before reading results |
+| G0 engineering | tests pass; 0 unmatched fixations; injection amplitude slope ≥ 0.8 for `res` and `res_ovl` at ρ = 0 (injection run on every reader of the current stage-1a build) | fix the pipeline before reading results |
 | G1 raw signal exists | random_N100: raw − noise and raw − raw_shift CI lower bound > 0, and permutation p < 0.05 | **Outcome D**: no decodable word information even before deconfounding with this decoder. Stop expansion; before reporting the null, add an injected-signal *decoding* control (not yet implemented) to bound what this decoder can detect |
 | G2 primary (§32) | balanced_exact_N100: res CI lower bound > chance and res − noise lower bound > 0; matched_N100: res − {res_shift, gaze, prior, noise} lower bounds > 0 | the claim is not supported |
 | G3 probes | linear probe R²(z_res) < R²(z_raw) on ≥ 4 of 7 oculomotor targets | "decodable oculomotor information decreases" is not supported |
@@ -132,7 +134,7 @@ hyperparameters) are labelled as such and never move a gate.
 | Normalization from training data only | channel mean/SD from training events only (`train_eval.py`) | code review |
 | Vocabulary threshold from training texts only | `train_count` counts only training-block sentences | `summary.json` |
 | Model selection without test readers or test texts | early stopping on training readers × selection block | `metrics.json` records the partitions |
-| Same galleries for every condition | one gallery file per fold, keyed by event id | `report.contrast` refuses non-identical event sets |
+| Same galleries for every condition | one gallery file per fold, keyed by event id; runs record gallery digests | contrasts are paired on shared events; a gate uses a contrast only when both conditions cover identical events |
 | No presentation-order leak (P01) | contiguous-block text folds | lobo7 copied in `assets/splits` |
 
 ## 8. Decisions for the researcher

@@ -28,9 +28,13 @@ def channel_keep():
     return np.flatnonzero(cp.is_constant.to_numpy() == 0)
 
 
+def subject_rng(subject, seed=0):
+    """Generator seeded per reader (reader codes all have the same length, so the name itself is hashed)."""
+    return np.random.default_rng([seed, zlib.crc32(subject.encode())])
+
+
 def subject_shift(subject, n, seed=0):
-    rng = np.random.default_rng([seed, zlib.crc32(subject.encode())])
-    return int(rng.integers(MIN_SHIFT, n - MIN_SHIFT))
+    return int(subject_rng(subject, seed).integers(MIN_SHIFT, n - MIN_SHIFT))
 
 
 def _signal(z, base):

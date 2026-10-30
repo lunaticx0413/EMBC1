@@ -23,11 +23,12 @@ def continuous_path(subject):
     return DATA / "continuous" / f"{subject}.npz"
 
 
+STAGE1A_SUFFIXES = dict(npz=".npz", fix="_fix.csv", words="_words.json", info="_info.json")
+
+
 def subject_outputs(subject):
     """Stage-1a outputs of one reader. The info file is written last and marks completion."""
-    d = DATA / "continuous"
-    return dict(npz=d / f"{subject}.npz", fix=d / f"{subject}_fix.csv", words=d / f"{subject}_words.json",
-                info=d / f"{subject}_info.json")
+    return {k: DATA / "continuous" / f"{subject}{suf}" for k, suf in STAGE1A_SUFFIXES.items()}
 
 
 def subject_complete(subject):

@@ -4,6 +4,9 @@ Linear (ridge, CV alpha) and MLP probes fitted on training-partition embeddings 
 partition (held-out subjects and texts). Blink state is not probed: ZuCo ships no blink annotations; long
 inter-fixation gaps are only a proxy and are part of the residualization design.
 
+Only completed runs whose inputs and code are current are probed. probes.json records the digest of the
+z.npz it was computed from, so the report can drop probes of a run that has since been retrained.
+
     python scripts/probes.py --runs runs/main/fold1/sf0/raw/seed0 runs/main/fold1/sf0/res/seed0
 """
 import argparse
@@ -22,7 +25,7 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from embc import paths  # noqa: E402
+from embc import paths, runs  # noqa: E402
 
 TARGETS = dict(log_ffd=lambda e: np.log(e.ffd_ms), log_gd=lambda e: np.log(e.gd_ms),
                sacc_in_amp=lambda e: e.sacc_in_amp, sacc_out_amp=lambda e: e.sacc_out_amp,
@@ -62,16 +65,20 @@ def probe_run(run, E, max_train=20000, seed=0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", nargs="+", required=True)
-    ap.add_argument("--fold", type=int, default=1)
     a = ap.parse_args()
-    E = pd.read_csv(paths.fold_dir(a.fold) / "events.csv", keep_default_na=False, na_values=[""])
+    events = {}
     for r in a.runs:
         r = Path(r)
-        if not (r / "metrics.json").exists():
-            print(f"{r}: not a completed run, skipped", flush=True)
+        why = runs.stale_reason(r)
+        if why:
+            print(f"{r}: {why}, skipped", flush=True)
             continue
-        res = probe_run(r, E)
-        (r / "probes.json").write_text(json.dumps(res, indent=1))
+        fold = runs.read_metrics(r)["config"]["fold"]                # the events the run was trained on
+        if fold not in events:
+            events[fold] = pd.read_csv(paths.fold_dir(fold) / "events.csv", keep_default_na=False, na_values=[""])
+        res = probe_run(r, events[fold])
+        runs.write_atomic(r / "probes.json", json.dumps(dict(source=dict(z=runs.file_digest(r / "z.npz")),
+                                                             targets=res), indent=1))
         print(r, json.dumps({k: round(v["linear"]["r2"], 3) for k, v in res.items()}), flush=True)
 
 

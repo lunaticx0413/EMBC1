@@ -1,5 +1,6 @@
 """Word events (first fixation on each word), reading measures, partitions and epoch window validity."""
 import json
+import re
 
 import numpy as np
 import pandas as pd
@@ -10,17 +11,27 @@ PRE, POST = 10, 60                       # epoch -100 .. +600 ms at 100 Hz (iden
 MIN_VALID = 0.9
 
 
+# a stage-1a output of reader <name>, or its temporary file (".tmp<pid>", or ".tmp.npz" for the npz)
+_STAGE1A_FILE = re.compile(r"^([A-Za-z0-9]+)(?:%s)(?:\.tmp\d*(?:\.npz)?)?$"
+                           % "|".join(re.escape(s) for s in paths.STAGE1A_SUFFIXES.values()))
+
+
+def _stage1a_readers():
+    d = paths.DATA / "continuous"
+    if not d.exists():
+        return set()
+    return {m.group(1) for p in d.iterdir() if p.is_file() and (m := _STAGE1A_FILE.match(p.name))}
+
+
 def subjects_available():
     """Readers whose stage-1a outputs are complete (an interrupted build is not listed)."""
-    names = (p.name[:-4] for p in (paths.DATA / "continuous").glob("*.npz") if not p.name.endswith(".tmp.npz"))
-    return sorted(s for s in names if paths.subject_complete(s))
+    return sorted(s for s in _stage1a_readers() if paths.subject_complete(s))
 
 
 def incomplete_subjects():
-    """Readers with some stage-1a output but no completion marker (interrupted build)."""
-    d = paths.DATA / "continuous"
-    seen = {p.name.split("_")[0].split(".")[0] for p in d.glob("*") if p.is_file()} if d.exists() else set()
-    return sorted(s for s in seen if not paths.subject_complete(s))
+    """Readers with some stage-1a output but no completion marker (interrupted build). Files that are not
+    stage-1a outputs (e.g. .directory, notes.txt, *.bak) are ignored."""
+    return sorted(s for s in _stage1a_readers() if not paths.subject_complete(s))
 
 
 def reading_measures(fix):

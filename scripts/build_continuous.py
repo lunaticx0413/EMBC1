@@ -3,6 +3,7 @@
 Writes data/continuous/<SUBJ>.npz (raw, res, resfull as float16; bad mask; sentence segments; gaze trace;
 fixation intercept kernel), <SUBJ>_fix.csv (all word fixations), <SUBJ>_words.json and <SUBJ>_info.json.
 Each file is written atomically; <SUBJ>_info.json is written last and marks the reader as complete.
+It records the npz content digest that training runs fingerprint.
 Resumable: complete readers are skipped; a partially written reader is rebuilt.
 
     python scripts/build_continuous.py [--subjects YAC,YAG] [--ridge 1e-3]
@@ -20,14 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from embc import paths  # noqa: E402
 from embc.design import residualize  # noqa: E402
 from embc.io_zuco import read_subject, subject_from_path  # noqa: E402
+from embc.runs import file_digest, write_atomic  # noqa: E402
 from embc.stream import build_stream, design_inputs  # noqa: E402
-
-
-def write_atomic(path, text):
-    tmp = str(path) + ".tmp"
-    with open(tmp, "w") as fh:
-        fh.write(text)
-    os.replace(tmp, path)
 
 
 def main():
@@ -67,6 +62,7 @@ def main():
         np.savez(tmp, raw=Y.astype(np.float16), res=r["res"].astype(np.float16),
                  resfull=r["resfull"].astype(np.float16), bad=bad, seg=seg, gaze=gaze.astype(np.float32),
                  kernel=r["kernel"].astype(np.float32), kernel_lags=r["kernel_lags"])
+        info["npz_sha256"] = file_digest(tmp)                 # identifies this build in run configurations
         os.replace(tmp, outs["npz"])
         fix.to_csv(str(outs["fix"]) + ".tmp", index=False)
         os.replace(str(outs["fix"]) + ".tmp", outs["fix"])
