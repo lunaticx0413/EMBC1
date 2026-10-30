@@ -17,8 +17,9 @@ no scientific results yet.**
 
 | Check | Result |
 |---|---|
-| `python -m pytest -q` | 24 passed |
+| `python -m pytest -q` | 30 passed |
 | Smoke run of every stage (2 epochs, 3,000 training events, reader folds 0–1, scratch output) | all stages ran without error; numbers not interpretable |
+| Review fixes (2026-10-29): config-validated run reuse, selection-gallery rows, partial/undersized batches, stage-1a completion marker | each exercised on real data in scratch dirs: changed config refused, same config skipped, `TRAIN_ARGS` refused under `EXP=main`, `balanced_exact` selection runs, 100 training events → 1 step/epoch, 1 event refused, interrupted reader rebuilt and blocked downstream |
 | Frequency prior with no EEG (reader fold 0) | MRR random 0.240, matched 0.235, balanced 0.164, balanced_exact 0.045 (chance 0.052) |
 | Injection recovery (smoke, 2 readers, ρ = 0) | amplitude slope 0.99 for raw/res/res_ovl |
 

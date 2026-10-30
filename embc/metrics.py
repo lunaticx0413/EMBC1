@@ -48,6 +48,12 @@ def score_galleries(Z, T, G):
     return out
 
 
+def gallery_mrr(Z, T, rows, G):
+    """Mean reciprocal rank of the events Z[rows] against their galleries G (G row i belongs to Z[rows[i]])."""
+    g, e = gallery_ranks(score_galleries(Z[rows], T, G))
+    return float(rank_metrics(g, e, G.shape[1])["RR"].mean())
+
+
 # ---------------------------------------------------------------- statistics over subjects
 
 def subject_means(values, subjects):

@@ -4,10 +4,12 @@ Partition (unseen subject + unseen text): train = training subjects x training b
 = training subjects x validation block (val MRR, random gallery); test = held-out subjects x test block.
 cond "prior" trains nothing and ranks candidates by their training-text frequency.
 
-Outputs in runs/fold<f>/sf<k>/<cond>/seed<s>/: model.pt, z.npz (embeddings of train/val/test events for
-probes), test_<gallery>.csv (per-event tie-aware metrics), metrics.json, train_log.json.
+Outputs in runs/<exp>/fold<f>/sf<k>/<cond>/seed<s>/: model.pt, z.npz (embeddings of train/val/test events
+for probes), test_<gallery>.csv (per-event tie-aware metrics), train_log.json, and metrics.json, written last
+as the completion marker together with the run configuration. A completed run with the same configuration
+is skipped; one with a different configuration is refused unless --overwrite is given.
 
-    python scripts/train_eval.py --fold 1 --subject_fold 0 --cond res --seed 0
+    python scripts/train_eval.py --fold 1 --subject_fold 0 --cond res --seed 0 [--exp main]
 """
 import argparse
 import json
@@ -24,6 +26,7 @@ from embc import events as ev  # noqa: E402
 from embc import lexicon as lx  # noqa: E402
 from embc import metrics as mt  # noqa: E402
 from embc import paths  # noqa: E402
+from embc import runs  # noqa: E402
 from embc.inputs import load_condition  # noqa: E402
 from embc.model import EEGEncoder, VectorEncoder, info_nce  # noqa: E402
 
@@ -80,22 +83,40 @@ def main():
     ap.add_argument("--tau", type=float, default=0.07)
     ap.add_argument("--select_gallery", default="random_N100")
     ap.add_argument("--max_train_events", type=int, default=None, help="smoke tests only")
+    ap.add_argument("--exp", default="main", help="experiment name; separates e.g. smoke runs from main runs")
+    ap.add_argument("--overwrite", action="store_true", help="replace a completed run with another config")
     ap.add_argument("--device", default="cuda")
     a = ap.parse_args()
     t0 = time.time()
     torch.manual_seed(a.seed)
     np.random.seed(a.seed)
     fdir = paths.fold_dir(a.fold)
-    out = paths.RUNS / f"fold{a.fold}" / f"sf{a.subject_fold}" / a.cond / f"seed{a.seed}"
-    out.mkdir(parents=True, exist_ok=True)
+    out = paths.RUNS / a.exp / f"fold{a.fold}" / f"sf{a.subject_fold}" / a.cond / f"seed{a.seed}"
+    data_files = [fdir / "events.csv", fdir / "types.npz", *sorted(fdir.glob("galleries_*.npz")),
+                  paths.DATA / f"subject_folds_k{a.k_subject_folds}.json"]
     E = pd.read_csv(fdir / "events.csv", keep_default_na=False, na_values=[""])
     ty = np.load(fdir / "types.npz")
     T = ty["emb"].astype(np.float32)
     subjects = sorted(E.subject.unique())
-    folds = ev.subject_folds(subjects, a.k_subject_folds)
+    folds = ev.subject_folds(subjects, a.k_subject_folds)              # creates the folds file on first use
+    config = runs.run_config(vars(a), data_files)
+    try:
+        state = runs.existing_run_state(out, config)
+    except runs.RunConfigMismatch as err:
+        if not a.overwrite:
+            raise SystemExit(f"refusing to reuse {out}: {err}")
+        state = "missing"
+    if state == "done":
+        print(f"{out}: completed with this configuration, skipping")
+        return
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "metrics.json").unlink(missing_ok=True)                    # no stale completion marker
     P = partitions(E, folds, a.subject_fold)
     if a.max_train_events:
         P["train"] = P["train"].sample(min(a.max_train_events, len(P["train"])), random_state=a.seed)
+    sizes = {k: len(v) for k, v in P.items()}
+    if sizes["test"] < 1 or (a.cond != "prior" and (sizes["train"] < 2 or sizes["val"] < 1)):
+        raise SystemExit(f"partition too small for training/evaluation: {sizes}")
     gal = {k: lx.load_galleries(fdir, P[k].event_id.to_numpy()) for k in ("val", "test")}
     info = dict(vars(a), test_subjects=folds[a.subject_fold], n_train=len(P["train"]), n_val=len(P["val"]),
                 n_test=len(P["test"]))
@@ -104,7 +125,7 @@ def main():
         rows, res = evaluate(None, None, gal["test"], P["test"], scorer=lambda G: prior_scores(ty["train_count"], G))
         for name, df in rows.items():
             df.to_csv(out / f"test_{name}.csv", index=False)
-        (out / "metrics.json").write_text(json.dumps(dict(info=info, test=res), indent=1))
+        (out / "metrics.json").write_text(json.dumps(dict(config=config, info=info, test=res), indent=1))
         print(json.dumps({k: v["RR"] for k, v in res.items()}))
         return
 
@@ -152,25 +173,26 @@ def main():
         return np.concatenate(zs) if zs else np.zeros((0, T.shape[1]), np.float32)
 
     Tt = torch.from_numpy(T).to(dev)
-    tid = torch.from_numpy(allE.type_id.to_numpy()).to(dev)
+    tid = torch.tensor(allE.type_id.to_numpy(), device=dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd)
     best, best_state, bad_epochs, log = -1.0, None, 0, []
-    Gsel = gal["val"][a.select_gallery][1]
+    rsel, Gsel = gal["val"][a.select_gallery]                       # rows index the validation events
+    batches = runs.batch_slices(ntr, a.batch)
     for epoch in range(a.epochs):
         model.train()
         perm = torch.randperm(ntr, device=dev)
         tot, nb = 0.0, 0
-        for i in range(0, ntr - a.batch + 1, a.batch):
-            idx = perm[i:i + a.batch]
+        for lo, hi in batches:
+            idx = perm[lo:hi]
             loss = info_nce(model(batch_input(idx)), tid[idx], Tt, a.tau)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
             tot += loss.item(); nb += 1
-        Zv = embed(ntr, ntr + nva)
-        g, e = mt.gallery_ranks(mt.score_galleries(Zv, T, Gsel))
-        val_mrr = float(mt.rank_metrics(g, e, Gsel.shape[1])["RR"].mean())
-        log.append(dict(epoch=epoch, loss=tot / max(nb, 1), val_mrr=val_mrr))
+        if nb == 0:
+            raise SystemExit(f"no optimisation step possible with {ntr} training events")
+        val_mrr = mt.gallery_mrr(embed(ntr, ntr + nva), T, rsel, Gsel)
+        log.append(dict(epoch=epoch, loss=tot / nb, val_mrr=val_mrr))
         print(json.dumps(log[-1]), flush=True)
         if val_mrr > best:
             best, bad_epochs = val_mrr, 0
@@ -189,9 +211,10 @@ def main():
     np.savez(out / "z.npz", train_ids=P["train"].event_id.to_numpy(), val_ids=P["val"].event_id.to_numpy(),
              test_ids=P["test"].event_id.to_numpy(), z_train=Ztr.astype(np.float16), z_val=Zva.astype(np.float16),
              z_test=Zte.astype(np.float16))
-    info.update(best_val_mrr=best, epochs_run=len(log), seconds=round(time.time() - t0, 1))
+    info.update(best_val_mrr=best, epochs_run=len(log), steps_per_epoch=len(batches),
+                seconds=round(time.time() - t0, 1))
     (out / "train_log.json").write_text(json.dumps(log, indent=1))
-    (out / "metrics.json").write_text(json.dumps(dict(info=info, val=summ_val, test=summ), indent=1))
+    (out / "metrics.json").write_text(json.dumps(dict(config=config, info=info, val=summ_val, test=summ), indent=1))
     print(json.dumps({k: v["RR"] for k, v in summ.items()}))
 
 

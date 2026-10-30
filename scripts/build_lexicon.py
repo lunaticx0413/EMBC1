@@ -34,6 +34,8 @@ def main():
     out = paths.fold_dir(a.fold)
     out.mkdir(parents=True, exist_ok=True)
     cdir = paths.DATA / "continuous"
+    if bad := ev.incomplete_subjects():
+        raise SystemExit(f"incomplete stage-1a outputs for {bad}; rerun scripts/build_continuous.py")
     subjects = ev.subjects_available()
     part_of = ev.text_partition(a.fold)
 

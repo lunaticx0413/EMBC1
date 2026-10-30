@@ -11,7 +11,16 @@ MIN_VALID = 0.9
 
 
 def subjects_available():
-    return sorted(p.name[:-4] for p in (paths.DATA / "continuous").glob("*.npz") if not p.name.endswith(".tmp.npz"))
+    """Readers whose stage-1a outputs are complete (an interrupted build is not listed)."""
+    names = (p.name[:-4] for p in (paths.DATA / "continuous").glob("*.npz") if not p.name.endswith(".tmp.npz"))
+    return sorted(s for s in names if paths.subject_complete(s))
+
+
+def incomplete_subjects():
+    """Readers with some stage-1a output but no completion marker (interrupted build)."""
+    d = paths.DATA / "continuous"
+    seen = {p.name.split("_")[0].split(".")[0] for p in d.glob("*") if p.is_file()} if d.exists() else set()
+    return sorted(s for s in seen if not paths.subject_complete(s))
 
 
 def reading_measures(fix):

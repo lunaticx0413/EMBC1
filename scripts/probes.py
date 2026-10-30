@@ -4,7 +4,7 @@ Linear (ridge, CV alpha) and MLP probes fitted on training-partition embeddings 
 partition (held-out subjects and texts). Blink state is not probed: ZuCo ships no blink annotations; long
 inter-fixation gaps are only a proxy and are part of the residualization design.
 
-    python scripts/probes.py --runs runs/fold1/sf0/raw/seed0 runs/fold1/sf0/res/seed0
+    python scripts/probes.py --runs runs/main/fold1/sf0/raw/seed0 runs/main/fold1/sf0/res/seed0
 """
 import argparse
 import json
@@ -67,6 +67,9 @@ def main():
     E = pd.read_csv(paths.fold_dir(a.fold) / "events.csv", keep_default_na=False, na_values=[""])
     for r in a.runs:
         r = Path(r)
+        if not (r / "metrics.json").exists():
+            print(f"{r}: not a completed run, skipped", flush=True)
+            continue
         res = probe_run(r, E)
         (r / "probes.json").write_text(json.dumps(res, indent=1))
         print(r, json.dumps({k: round(v["linear"]["r2"], 3) for k, v in res.items()}), flush=True)

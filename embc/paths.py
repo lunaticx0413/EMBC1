@@ -23,5 +23,16 @@ def continuous_path(subject):
     return DATA / "continuous" / f"{subject}.npz"
 
 
+def subject_outputs(subject):
+    """Stage-1a outputs of one reader. The info file is written last and marks completion."""
+    d = DATA / "continuous"
+    return dict(npz=d / f"{subject}.npz", fix=d / f"{subject}_fix.csv", words=d / f"{subject}_words.json",
+                info=d / f"{subject}_info.json")
+
+
+def subject_complete(subject):
+    return all(f.exists() for f in subject_outputs(subject).values())
+
+
 def fold_dir(fold):
     return DATA / f"fold{fold}"

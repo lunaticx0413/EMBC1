@@ -105,7 +105,8 @@ model; LLM generation is out of scope.
 | 2 remaining text folds 2–7 | `FOLD=k` for build_lexicon + run_mvp | only if G1 passes; ~6 h GPU |
 | 3 published model, DERCo, rERP diagnostic, unprocessed-EEG condition | separate scripts | after Stage 2 and decision D1 |
 
-Use `PY=~/venvs/e2t/bin/python` on this machine. The scripts read data paths from `embc/paths.py`, which can
+Use `PY=~/venvs/e2t/bin/python` on this machine. Main runs live in `runs/main/`; smoke or exploratory runs
+need their own `EXP` name, and a run directory is only reused when its recorded configuration matches. The scripts read data paths from `embc/paths.py`, which can
 be overridden with `EMBC_*` environment variables.
 
 ## 6. Gates (fixed before any full run; computed by `scripts/report.py`)
