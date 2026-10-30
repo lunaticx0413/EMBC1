@@ -1,0 +1,10 @@
+# derived data, trained models, logs (regenerable; ZuCo-derived EEG is not redistributed here)
+data/
+runs/
+logs/
+.cache/
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
